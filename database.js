@@ -1,0 +1,42 @@
+const {Pool}=require('pg');
+const {encrypt,decrypt}=require('./crypto');
+const pool=new Pool({connectionString:process.env.DATABASE_URL,ssl:process.env.DATABASE_URL&&/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL)?false:{rejectUnauthorized:false},max:5});
+async function q(t,p=[]){return pool.query(t,p)}
+async function init(){
+ await q(`CREATE TABLE IF NOT EXISTS bots(
+  id BIGSERIAL PRIMARY KEY,name TEXT NOT NULL,first_name TEXT NOT NULL,last_name TEXT NOT NULL,
+  sl_password_enc TEXT NOT NULL DEFAULT '',start_location TEXT NOT NULL DEFAULT 'last',desired_online BOOLEAN NOT NULL DEFAULT false,
+  agent_url TEXT NOT NULL,agent_secret_enc TEXT NOT NULL DEFAULT '',render_service_id TEXT NOT NULL DEFAULT '',render_api_key_enc TEXT NOT NULL DEFAULT '',
+  default_group_id TEXT NOT NULL DEFAULT '',default_role_id TEXT NOT NULL DEFAULT '',default_role_name TEXT NOT NULL DEFAULT '',
+  home_url TEXT NOT NULL DEFAULT '',home_object_uuid TEXT NOT NULL DEFAULT '',auto_sit BOOLEAN NOT NULL DEFAULT false,auto_go_home BOOLEAN NOT NULL DEFAULT false,
+  auto_accept_groups BOOLEAN NOT NULL DEFAULT true,allow_teleport_links BOOLEAN NOT NULL DEFAULT true,allow_rlv BOOLEAN NOT NULL DEFAULT false,
+  only_allowed_admins BOOLEAN NOT NULL DEFAULT false,admin_names JSONB NOT NULL DEFAULT '[]',admin_uuids JSONB NOT NULL DEFAULT '[]',
+  welcome_enabled BOOLEAN NOT NULL DEFAULT false,welcome_message TEXT NOT NULL DEFAULT '',announcement_enabled BOOLEAN NOT NULL DEFAULT false,
+  announcement_minutes INTEGER NOT NULL DEFAULT 15,announcement_message TEXT NOT NULL DEFAULT '',reconnect_ms INTEGER NOT NULL DEFAULT 15000,
+  last_agent_seen TIMESTAMPTZ,last_phase TEXT NOT NULL DEFAULT 'unknown',last_reason TEXT NOT NULL DEFAULT '',last_online BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+ )`);
+ await q(`CREATE TABLE IF NOT EXISTS bot_logs(id BIGSERIAL PRIMARY KEY,bot_id BIGINT REFERENCES bots(id) ON DELETE CASCADE,line TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+}
+function pub(r){if(!r)return null;return {id:Number(r.id),name:r.name,firstName:r.first_name,lastName:r.last_name,password:'********',start:r.start_location,desiredOnline:r.desired_online,agentUrl:r.agent_url,agentSecret:'********',renderServiceId:r.render_service_id,renderApiKey:r.render_api_key_enc?'********':'',group:{defaultGroupID:r.default_group_id,defaultRoleID:r.default_role_id,defaultRoleName:r.default_role_name},home:{url:r.home_url,objectUUID:r.home_object_uuid,autoSit:r.auto_sit,autoGoHome:r.auto_go_home},features:{autoAcceptGroups:r.auto_accept_groups,allowTeleportLinks:r.allow_teleport_links,allowRlv:r.allow_rlv,onlyAllowedAdmins:r.only_allowed_admins,welcomeEnabled:r.welcome_enabled,welcomeMessage:r.welcome_message,localAnnouncementEnabled:r.announcement_enabled,announcementMinutes:r.announcement_minutes,announcementMessage:r.announcement_message,reconnectMs:r.reconnect_ms},security:{allowedAdminNames:r.admin_names||[],allowedAdminUUIDs:r.admin_uuids||[]},runtime:{lastAgentSeen:r.last_agent_seen,lastPhase:r.last_phase,lastReason:r.last_reason,lastOnline:r.last_online}}}
+function cfg(r){const b=pub(r);b.bot={firstName:r.first_name,lastName:r.last_name,password:decrypt(r.sl_password_enc),start:r.start_location};b.agentSecret=decrypt(r.agent_secret_enc);b.renderApiKey=decrypt(r.render_api_key_enc);delete b.password;return b}
+async function list(){return (await q('SELECT * FROM bots ORDER BY id')).rows.map(pub)}
+async function get(id,full=false){const r=(await q('SELECT * FROM bots WHERE id=$1',[id])).rows[0];return full?cfg(r):pub(r)}
+async function findByAgentSecret(secret){const rows=(await q('SELECT * FROM bots ORDER BY id')).rows;for(const r of rows){try{if(decrypt(r.agent_secret_enc)===String(secret||''))return cfg(r)}catch{}}return null}
+function arr(v){return Array.isArray(v)?v:[]}
+async function create(d){
+ const b=d.bot||d, f=d.features||{},g=d.group||{},h=d.home||{},s=d.security||{};
+ const r=await q(`INSERT INTO bots(name,first_name,last_name,sl_password_enc,start_location,desired_online,agent_url,agent_secret_enc,render_service_id,render_api_key_enc,default_group_id,default_role_id,default_role_name,home_url,home_object_uuid,auto_sit,auto_go_home,auto_accept_groups,allow_teleport_links,allow_rlv,only_allowed_admins,admin_names,admin_uuids,welcome_enabled,welcome_message,announcement_enabled,announcement_minutes,announcement_message,reconnect_ms)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29) RETURNING *`,[
+ d.name||`${b.firstName||''} ${b.lastName||''}`.trim()||'Novo Bot',b.firstName||'',b.lastName||'',encrypt(b.password||''),b.start||'last',!!d.desiredOnline,String(d.agentUrl||'').replace(/\/$/,''),encrypt(d.agentSecret||''),d.renderServiceId||'',encrypt(d.renderApiKey||''),g.defaultGroupID||'',g.defaultRoleID||'',g.defaultRoleName||'',h.url||'',h.objectUUID||'',!!h.autoSit,!!h.autoGoHome,f.autoAcceptGroups!==false,f.allowTeleportLinks!==false,!!f.allowRlv,!!f.onlyAllowedAdmins,JSON.stringify(arr(s.allowedAdminNames)),JSON.stringify(arr(s.allowedAdminUUIDs)),!!f.welcomeEnabled,f.welcomeMessage||'',!!f.localAnnouncementEnabled,Number(f.announcementMinutes||15),f.announcementMessage||'',Number(f.reconnectMs||15000)]); return pub(r.rows[0]);
+}
+async function update(id,d){const old=(await q('SELECT * FROM bots WHERE id=$1',[id])).rows[0];if(!old)throw new Error('Bot não encontrado');const b=d.bot||{},f=d.features||{},g=d.group||{},h=d.home||{},s=d.security||{};
+ const pass=(!b.password||b.password==='********')?old.sl_password_enc:encrypt(b.password);const asec=(!d.agentSecret||d.agentSecret==='********')?old.agent_secret_enc:encrypt(d.agentSecret);const rak=(!d.renderApiKey||d.renderApiKey==='********')?old.render_api_key_enc:encrypt(d.renderApiKey);
+ const vals=[d.name??old.name,b.firstName??old.first_name,b.lastName??old.last_name,pass,b.start??old.start_location,d.agentUrl?String(d.agentUrl).replace(/\/$/,''):old.agent_url,asec,d.renderServiceId??old.render_service_id,rak,g.defaultGroupID??old.default_group_id,g.defaultRoleID??old.default_role_id,g.defaultRoleName??old.default_role_name,h.url??old.home_url,h.objectUUID??old.home_object_uuid,h.autoSit??old.auto_sit,h.autoGoHome??old.auto_go_home,f.autoAcceptGroups??old.auto_accept_groups,f.allowTeleportLinks??old.allow_teleport_links,f.allowRlv??old.allow_rlv,f.onlyAllowedAdmins??old.only_allowed_admins,JSON.stringify(s.allowedAdminNames??old.admin_names),JSON.stringify(s.allowedAdminUUIDs??old.admin_uuids),f.welcomeEnabled??old.welcome_enabled,f.welcomeMessage??old.welcome_message,f.localAnnouncementEnabled??old.announcement_enabled,Number(f.announcementMinutes??old.announcement_minutes),f.announcementMessage??old.announcement_message,Number(f.reconnectMs??old.reconnect_ms),id];
+ const r=await q(`UPDATE bots SET name=$1,first_name=$2,last_name=$3,sl_password_enc=$4,start_location=$5,agent_url=$6,agent_secret_enc=$7,render_service_id=$8,render_api_key_enc=$9,default_group_id=$10,default_role_id=$11,default_role_name=$12,home_url=$13,home_object_uuid=$14,auto_sit=$15,auto_go_home=$16,auto_accept_groups=$17,allow_teleport_links=$18,allow_rlv=$19,only_allowed_admins=$20,admin_names=$21,admin_uuids=$22,welcome_enabled=$23,welcome_message=$24,announcement_enabled=$25,announcement_minutes=$26,announcement_message=$27,reconnect_ms=$28,updated_at=now() WHERE id=$29 RETURNING *`,vals);return pub(r.rows[0]);}
+async function del(id){await q('DELETE FROM bots WHERE id=$1',[id])}
+async function desired(id,v){await q('UPDATE bots SET desired_online=$2,updated_at=now() WHERE id=$1',[id,!!v])}
+async function heartbeat(id,s){await q('UPDATE bots SET last_agent_seen=now(),last_phase=$2,last_reason=$3,last_online=$4 WHERE id=$1',[id,String(s.phase||'unknown').slice(0,80),String(s.lastReason||'').slice(0,500),!!s.online])}
+async function log(id,line){await q('INSERT INTO bot_logs(bot_id,line) VALUES($1,$2)',[id,String(line).slice(0,4000)]);await q(`DELETE FROM bot_logs WHERE bot_id=$1 AND id NOT IN (SELECT id FROM bot_logs WHERE bot_id=$1 ORDER BY id DESC LIMIT 300)`,[id])}
+async function logs(id){return (await q('SELECT created_at,line FROM bot_logs WHERE bot_id=$1 ORDER BY id DESC LIMIT 150',[id])).rows.reverse().map(x=>`[${x.created_at.toISOString()}] ${x.line}`)}
+module.exports={init,list,get,findByAgentSecret,create,update,del,desired,heartbeat,log,logs,q};
