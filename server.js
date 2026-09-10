@@ -22,6 +22,42 @@ app.use(session({
     maxAge:1000*60*60*24*7
   }
 }));
+// Ao abrir a página pública do Master, acorda em segundo plano os Agents
+// que estão cadastrados como desejados online. Não expõe comandos administrativos.
+let lastPublicWake = 0;
+async function wakeDesiredAgents(){
+  const now = Date.now();
+  // Evita disparar vários wake-ups seguidos caso a página seja atualizada repetidamente.
+  if (now - lastPublicWake < 15000) return;
+  lastPublicWake = now;
+  try {
+    const bots = await db.list();
+    const targets = bots.filter(b => b.desiredOnline && b.agentUrl);
+    for (const b of targets) {
+      // Não aguardamos o resultado: só precisamos gerar uma requisição de entrada
+      // no serviço Free do Render para que ele acorde.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      fetch(String(b.agentUrl).replace(/\/$/, '') + '/health', {
+        method: 'GET',
+        signal: controller.signal
+      }).catch(() => {}).finally(() => clearTimeout(timer));
+    }
+    if (targets.length) console.log(`Wake público: ${targets.length} Agent(s) acionado(s).`);
+  } catch (e) {
+    console.warn('Wake público falhou:', e.message);
+  }
+}
+
+// IMPORTANTE: este middleware vem ANTES do express.static.
+// Assim, visitar / já dispara o wake mesmo quando index.html é servido como arquivo estático.
+app.use((req,res,next)=>{
+  if(req.method==='GET' && (req.path==='/' || req.path==='/index.html')){
+    wakeDesiredAgents().catch(()=>{});
+  }
+  next();
+});
+
 app.use(express.static(path.join(__dirname,'public')));
 function auth(req,res,next){if(req.session.ok)return next();res.status(401).json({ok:false,error:'Não autenticado'});}function fail(res,e,code=500){res.status(code).json({ok:false,error:e.message||String(e)})}
 app.get('/',(_q,r)=>r.sendFile(path.join(__dirname,'public/index.html')));
