@@ -1,0 +1,5 @@
+const crypto=require('crypto');
+function derive(password,salt){return crypto.scryptSync(String(password),salt,32)}
+function encryptBackup(obj,password){if(!password||String(password).length<6)throw new Error('Use uma senha de backup com pelo menos 6 caracteres.');const salt=crypto.randomBytes(16),iv=crypto.randomBytes(12);const cipher=crypto.createCipheriv('aes-256-gcm',derive(password,salt),iv);const plain=Buffer.from(JSON.stringify(obj),'utf8');const enc=Buffer.concat([cipher.update(plain),cipher.final()]);return {format:'SLBOT-BACKUP',version:1,kdf:'scrypt',salt:salt.toString('base64'),iv:iv.toString('base64'),tag:cipher.getAuthTag().toString('base64'),data:enc.toString('base64')}}
+function decryptBackup(pkg,password){if(!pkg||pkg.format!=='SLBOT-BACKUP')throw new Error('Arquivo de backup inválido.');const salt=Buffer.from(pkg.salt,'base64'),iv=Buffer.from(pkg.iv,'base64'),tag=Buffer.from(pkg.tag,'base64');const d=crypto.createDecipheriv('aes-256-gcm',derive(password,salt),iv);d.setAuthTag(tag);return JSON.parse(Buffer.concat([d.update(Buffer.from(pkg.data,'base64')),d.final()]).toString('utf8'))}
+module.exports={encryptBackup,decryptBackup};
