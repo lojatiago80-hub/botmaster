@@ -1,6 +1,28 @@
 const {Pool}=require('pg');
 const {encrypt,decrypt}=require('./crypto');
-const pool=new Pool({connectionString:process.env.DATABASE_URL,ssl:process.env.DATABASE_URL&&/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL)?false:{rejectUnauthorized:false},max:5});
+
+const rawDatabaseUrl=process.env.DATABASE_URL||'';
+if(!rawDatabaseUrl) throw new Error('DATABASE_URL não configurada.');
+
+let databaseUrl=rawDatabaseUrl;
+try{
+ const u=new URL(rawDatabaseUrl);
+ // O SSL é controlado pelo Pool, evitando conflito com sslmode da URL.
+ u.searchParams.delete('sslmode');
+ u.searchParams.delete('uselibpqcompat');
+ databaseUrl=u.toString();
+}catch(e){}
+
+const isLocal=/localhost|127\.0\.0\.1/.test(databaseUrl);
+
+const pool=new Pool({
+ connectionString:databaseUrl,
+ ssl:isLocal?false:{rejectUnauthorized:false},
+ max:5,
+ idleTimeoutMillis:30000,
+ connectionTimeoutMillis:10000
+});
+
 async function q(t,p=[]){return pool.query(t,p)}
 async function init(){
  await q(`CREATE TABLE IF NOT EXISTS bots(
