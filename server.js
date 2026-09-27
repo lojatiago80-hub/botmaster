@@ -5,12 +5,25 @@ const app=express();const PORT=Number(process.env.PORT||10000);
 // Render termina o HTTPS no proxy. Sem trust proxy, cookies 'secure' podem não ser gravados.
 app.set('trust proxy',1);
 app.use(express.json({limit:'10mb'}));app.use(express.urlencoded({extended:true}));
+
+function sessionDatabaseUrl(raw){
+  if(!raw)return '';
+  try{
+    const u=new URL(raw);
+    u.searchParams.delete('sslmode');
+    u.searchParams.delete('uselibpqcompat');
+    return u.toString();
+  }catch{
+    return raw;
+  }
+}
+const SESSION_DATABASE_URL=sessionDatabaseUrl(process.env.DATABASE_URL);
 app.use(session({
   store:new PgSession({
-    conString:process.env.DATABASE_URL,
+    conString:SESSION_DATABASE_URL,
     createTableIfMissing:true,
     tableName:'user_sessions',
-    ssl:process.env.DATABASE_URL&&/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL)?false:{rejectUnauthorized:false}
+    ssl:SESSION_DATABASE_URL&&/localhost|127\.0\.0\.1/.test(SESSION_DATABASE_URL)?false:{rejectUnauthorized:false}
   }),
   secret:process.env.SESSION_SECRET||'troque-essa-chave',
   resave:false,
