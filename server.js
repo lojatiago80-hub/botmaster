@@ -1,5 +1,5 @@
 require('dotenv').config();
-const express=require('express');const session=require('express-session');const PgSession=require('connect-pg-simple')(session);const path=require('path');const db=require('./database');const agent=require('./agentClient');
+const express=require('express');const session=require('express-session');const PgSession=require('connect-pg-simple')(session);const {Pool}=require('pg');const path=require('path');const db=require('./database');const agent=require('./agentClient');
 const {encryptBackup,decryptBackup}=require('./backupCrypto');
 const app=express();const PORT=Number(process.env.PORT||10000);
 // Render termina o HTTPS no proxy. Sem trust proxy, cookies 'secure' podem não ser gravados.
@@ -18,12 +18,20 @@ function sessionDatabaseUrl(raw){
   }
 }
 const SESSION_DATABASE_URL=sessionDatabaseUrl(process.env.DATABASE_URL);
+const sessionIsLocal=/localhost|127\.0\.0\.1/.test(SESSION_DATABASE_URL);
+const sessionPool=new Pool({
+  connectionString:SESSION_DATABASE_URL,
+  ssl:sessionIsLocal?false:{rejectUnauthorized:false},
+  max:2,
+  idleTimeoutMillis:30000,
+  connectionTimeoutMillis:10000
+});
+
 app.use(session({
   store:new PgSession({
-    conString:SESSION_DATABASE_URL,
+    pool:sessionPool,
     createTableIfMissing:true,
-    tableName:'user_sessions',
-    ssl:SESSION_DATABASE_URL&&/localhost|127\.0\.0\.1/.test(SESSION_DATABASE_URL)?false:{rejectUnauthorized:false}
+    tableName:'user_sessions'
   }),
   secret:process.env.SESSION_SECRET||'troque-essa-chave',
   resave:false,
